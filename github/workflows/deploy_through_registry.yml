@@ -1,0 +1,71 @@
+name: Deploy Through Container Registry
+
+on:
+  push:
+    branches: [main] # Это можно изменить на название вашей основной ветки
+
+# Установка необходимых разрешений для развертывания
+permissions:
+  contents: read
+  id-token: write # Требуется для аутентификации в реестре
+
+# Переменные окружения - настройте их для вашего проекта
+env:
+  # Информация о реестре
+  REGISTRY: cr.example.com # URL вашего реестра контейнеров (например, cr.yandex, ghcr.io и т.д.)
+  IMAGE_NAME: your-org/your-app-name # Путь к вашему образу в реестре
+  
+  # Информация о развертывании
+  DEPLOYMENT: your-app-name # Название вашего развертывания
+  SERVER_HOST: your-server.example.com # Имя хоста вашего сервера
+  COMPOSE_DIR: /path/to/compose/dir/ # Директория с docker-compose на сервере
+  
+  # Секреты
+  REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+  SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    # Предотвращение одновременного запуска нескольких развертываний
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      # Получение вашего кода
+      - uses: actions/checkout@v4
+
+      # Вход в реестр контейнеров
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          # Используйте секреты репозитория для учетных данных - добавьте их в настройках вашего репозитория GitHub
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      # Сборка и отправка Docker-образа
+      - name: Build & push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Контекст сборки (текущая директория)
+          push: true # Отправить образ в реестр после сборки
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} # Тег с SHA коммита
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest # Всегда обновлять тег latest
+
+      # Развертывание сервисов через SSH
+      - name: Deploy services
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: root # Измените на соответствующего пользователя сервера
+          key: ${{ env.SERVER_SSH_KEY }} # SSH ключ, хранящийся в секретах репозитория
+          script: |
+            cd ${{ env.COMPOSE_DIR }}
+            docker compose pull
+            docker compose up -d 
